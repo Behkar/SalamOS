@@ -1,3 +1,5 @@
 .salam-build/
 /osslm
 /osslm.exe
+*.salam linguist-language=Salam
+
