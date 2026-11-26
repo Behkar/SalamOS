@@ -1,0 +1,194 @@
+// lang: en
+package main
+
+import baremetal
+import str
+
+extern:
+    func salam_out_flush(): void
+end
+
+mut cmd := Vector {} as Vector<int>
+mut ticks := 0
+mut history := Vector {} as Vector<str>
+
+func _serial_ready(): bool:
+    ret (baremetal.In8(0x3FD as u16) & 0x01 as u8) != 0 as u8
+end
+
+func _serial_read(): char:
+    mut ready := false
+    until not ready:
+        ready = _serial_ready()
+    end
+    ret baremetal.In8(0x3F8 as u16) as char
+end
+
+func _buf_clear():
+    cmd = Vector {} as Vector<int>
+end
+
+func _buf_push(c: char):
+    if cmd.Len() < 64:
+        cmd.Push(c as int)
+    end
+end
+
+func _buf_pop():
+    if cmd.Len() > 0:
+        cmd.Pop()
+    end
+end
+
+func _buf_to_str(): str:
+    ret str.FromCodePoints(cmd)
+end
+
+func _cmd_help():
+    baremetal.SerialWrite("Commands:\n")
+    baremetal.SerialWrite("  help     - show this help\n")
+    baremetal.SerialWrite("  clear    - clear screen\n")
+    baremetal.SerialWrite("  mem      - show heap usage\n")
+    baremetal.SerialWrite("  echo X   - print X\n")
+    baremetal.SerialWrite("  ticks    - show tick count\n")
+    baremetal.SerialWrite("  halt     - halt CPU\n")
+    baremetal.SerialWrite("  exit     - exit QEMU\n")
+    baremetal.SerialWrite("  reboot   - reboot CPU\n")
+    baremetal.SerialWrite("  version  - show version\n")
+    baremetal.SerialWrite("  vga      - draw on VGA\n")
+    baremetal.SerialWrite("  color    - colored text\n")
+end
+
+func _cmd_mem():
+    baremetal.SerialWrite("heap used: ")
+    baremetal.SerialWrite(str.FromInt(baremetal.HeapUsed() as int))
+    baremetal.SerialWrite(" bytes\n")
+    baremetal.SerialWrite("heap size: ")
+    baremetal.SerialWrite(str.FromInt(baremetal.HeapSize() as int))
+    baremetal.SerialWrite(" bytes\n")
+end
+
+func _cmd_echo(arg: str):
+    baremetal.SerialWrite(arg)
+    baremetal.SerialWrite("\n")
+end
+
+func _cmd_ticks():
+    baremetal.SerialWrite("ticks: ")
+    baremetal.SerialWrite(str.FromInt(ticks))
+    baremetal.SerialWrite("\n")
+end
+
+func _cmd_halt():
+    baremetal.SerialWrite("halting...\n")
+    baremetal.Halt()
+end
+
+func _cmd_exit():
+    baremetal.SerialWrite("exiting QEMU\n")
+    baremetal.ExitQemu(0)
+end
+
+func _cmd_reboot():
+    baremetal.SerialWrite("rebooting...\n")
+    baremetal.Out8(0x64 as u16, 0xFE as u8)
+end
+
+func _cmd_version():
+    baremetal.SerialWrite("SalamOS v0.1\n")
+end
+
+func _cmd_vga():
+    baremetal.WriteAt(0, 0, "SalamOS", 0x0F as u8)
+    baremetal.WriteAt(1, 0, ">", 0x0A as u8)
+    baremetal.SerialWrite("VGA updated\n")
+end
+
+func _cmd_clear():
+    baremetal.Clear()
+    baremetal.SerialWrite("screen cleared\n")
+end
+
+func _cmd_color():
+    baremetal.SerialWrite("\x1B[32m")
+    baremetal.SerialWrite("green text\n")
+    baremetal.SerialWrite("\x1B[31m")
+    baremetal.SerialWrite("red text\n")
+    baremetal.SerialWrite("\x1B[0m")
+    baremetal.SerialWrite("normal text\n")
+end
+
+func _pit_init():
+    baremetal.Out8(0x43 as u16, 0x36 as u8)
+    baremetal.Out8(0x40 as u16, 0x9C as u8)
+    baremetal.Out8(0x40 as u16, 0x2E as u8)
+end
+
+func _dispatch(cmd_str: str):
+    if cmd_str == "help":
+        _cmd_help()
+    else cmd_str == "mem":
+        _cmd_mem()
+    else cmd_str == "ticks":
+        _cmd_ticks()
+    else cmd_str == "halt":
+        _cmd_halt()
+    else cmd_str == "exit":
+        _cmd_exit()
+    else cmd_str == "reboot":
+        _cmd_reboot()
+    else cmd_str == "version":
+        _cmd_version()
+    else cmd_str == "vga":
+        _cmd_vga()
+    else cmd_str == "clear":
+        _cmd_clear()
+    else cmd_str == "color":
+        _cmd_color()
+    else cmd_str.starts_with("echo "):
+        _cmd_echo(cmd_str.substr(5, cmd_str.Len() - 5))
+    else cmd_str != "":
+        baremetal.SerialWrite("unknown command: ")
+        baremetal.SerialWrite(cmd_str)
+        baremetal.SerialWrite("\n")
+        baremetal.SerialWrite("type 'help' for commands\n")
+    end
+    history.Push(cmd_str)
+end
+
+func main:
+    baremetal.SerialWrite("=== SalamOS ===\n")
+    baremetal.SerialWrite("a tiny monolithic OS written in Salam\n")
+    baremetal.SerialWrite("type 'help' for commands\n")
+    baremetal.SerialWrite("\n")
+
+    _pit_init()
+
+    until true:
+        baremetal.SerialWrite("> ")
+
+        _buf_clear()
+
+        mut done := false
+        until not done:
+            c := _serial_read()
+            if c == '\r' or c == '\n':
+                done = true
+                baremetal.SerialWrite("\n")
+            else c == '\b' or c == 127 as char:
+                if cmd.Len() > 0:
+                    _buf_pop()
+                    baremetal.Out8(0x3F8 as u16, '\b' as u8)
+                    baremetal.Out8(0x3F8 as u16, ' ' as u8)
+                    baremetal.Out8(0x3F8 as u16, '\b' as u8)
+                end
+            else c >= ' ':
+                _buf_push(c)
+                baremetal.Out8(0x3F8 as u16, c as u8)
+            end
+            ticks++
+        end
+
+        _dispatch(_buf_to_str())
+    end
+end
